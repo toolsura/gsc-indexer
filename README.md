@@ -8,6 +8,21 @@ push a blog page into, or refresh it in, the index when you hold at least
 > service account to be an **Owner** and is scoped to JobPosting /
 > BroadcastEvent pages, so it does not apply to general blog URLs.
 
+## Install
+
+Install the latest release with `go install` (Go 1.16+):
+
+```
+go install -v github.com/toolsura/gsc-indexer@latest
+```
+
+This puts the `gsc-indexer` binary in `$GOBIN` (default `~/go/bin`) — make sure
+that directory is on your `PATH`. No release tag yet? Install the tip of `main`:
+
+```
+go install -v github.com/toolsura/gsc-indexer@main
+```
+
 ## Build
 
 ```

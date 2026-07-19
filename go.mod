@@ -1,4 +1,4 @@
-module gsc-indexer
+module github.com/toolsura/gsc-indexer
 
 go 1.25.0
 
