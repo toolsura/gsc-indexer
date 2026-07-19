@@ -10,7 +10,7 @@ push a blog page into, or refresh it in, the index when you hold at least
 
 ## Install
 
-Install the latest release with `go install` (Go 1.16+):
+Install the latest release with `go install` (Go 1.25+):
 
 ```
 go install -v github.com/toolsura/gsc-indexer@latest
