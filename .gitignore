@@ -1,0 +1,44 @@
+# Binaries for programs and plugins (built via `go build -o gsc-indexer .`)
+gsc-indexer
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+*.out
+
+# Coverage output
+coverage.txt
+*.coverprofile
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# Service account credentials — DO NOT COMMIT
+# The URL Inspection API needs OAuth; users place their JSON key here via -creds.
+sa.json
+credentials.json
+*.serviceaccount.json
+
+# Local environment / secrets
+.env
+.env.*
+
+# Project-local content not meant for the repo
+blog-drafts/
+.claude/
+
+# Editor and OS cruft
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
