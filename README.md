@@ -58,6 +58,54 @@ The posts cover each workflow end to end — single-URL and batch indexing,
 sitemap expansion, tracking indexed-vs-not over time with `-report`/`-diff`,
 and the Google Search Console service-account (OAuth) setup.
 
+## GitHub Action
+
+gsc-indexer is also published as a **GitHub Action**, so you can re-index URLs
+straight from CI on every push to your blog. It is listed on the GitHub
+Marketplace — website: https://www.toolsura.com.
+
+### Usage
+
+```yaml
+# .github/workflows/index.yml
+name: Index on Search Console
+on:
+  push:
+    branches: [main]
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: toolsura/gsc-indexer@v1
+        with:
+          service_account_json: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+          sitemap: "https://www.toolsura.com/sitemap.xml"
+          delay: "10s"
+          quiet: "true"
+          report: "./report"
+```
+
+### Inputs
+
+| Input | Required | Default | Maps to |
+|-------|----------|---------|---------|
+| `service_account_json` | yes | — | `-creds` (written to a `chmod 600` temp file) |
+| `api_key` | no | — | `-apikey` |
+| `site` | no | `https://www.toolsura.com/` | `-site` |
+| `urls` | no | — | positional args (one URL per line) |
+| `sitemap` | no | — | positional `.xml` URL (auto-expanded) |
+| `delay` | no | `1s` | `-delay` |
+| `quiet` | no | `false` | `-q` |
+| `dry_run` | no | `false` | `-dry-run` |
+| `json` | no | `false` | `-json` |
+| `color` | no | `never` | `-color` |
+| `report` | no | — | `-report` |
+| `diff` | no | — | `-diff` |
+
+> The Action writes your `service_account_json` secret to a `600`-permission
+> temp file that is removed on exit; the secret is never echoed to the log.
+
 ## Flags
 
 - `-creds`  service-account JSON (or env `GSC_CREDENTIALS`) — **required** for GSC

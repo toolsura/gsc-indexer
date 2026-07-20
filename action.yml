@@ -1,0 +1,67 @@
+name: "GSC Indexer"
+description: "Submit / re-index URLs to Google Search Console's URL Inspection API from CI."
+author: "ToolSura"
+branding:
+  icon: "search"
+  color: "blue"
+inputs:
+  service_account_json:
+    description: "Service-account JSON key (its CONTENTS, not a path). Written to a temp file at chmod 600."
+    required: true
+    secret: true
+  api_key:
+    description: "Google API key. Optional — GSC's URL Inspection API requires OAuth, so prefer service_account_json."
+    required: false
+    secret: true
+  site:
+    description: "GSC property / site URL."
+    required: false
+    default: "https://www.toolsura.com/"
+  urls:
+    description: "Newline-separated list of URLs to inspect (passed as positional args)."
+    required: false
+  sitemap:
+    description: "A sitemap URL (ending in .xml). Auto-expanded by the CLI into every <loc> entry."
+    required: false
+  delay:
+    description: "Delay between requests (Go duration, e.g. 1s, 10s)."
+    required: false
+    default: "1s"
+  quiet:
+    description: "Quiet mode: progress line + summary + errors only."
+    required: false
+    default: "false"
+  dry_run:
+    description: "Expand and list the URLs that would be inspected, then exit (no API calls)."
+    required: false
+    default: "false"
+  json:
+    description: "Emit results as JSON."
+    required: false
+    default: "false"
+  color:
+    description: "Color output: auto, always, or never."
+    required: false
+    default: "never"
+  report:
+    description: "Write indexed.txt / not-indexed.txt / summary.json into this dir."
+    required: false
+  diff:
+    description: "Compare against a saved summary.json and report changes."
+    required: false
+runs:
+  using: "docker"
+  image: "Dockerfile"
+  env:
+    INPUT_SERVICE_ACCOUNT_JSON: ${{ inputs.service_account_json }}
+    INPUT_API_KEY: ${{ inputs.api_key }}
+    INPUT_SITE: ${{ inputs.site }}
+    INPUT_URLS: ${{ inputs.urls }}
+    INPUT_SITEMAP: ${{ inputs.sitemap }}
+    INPUT_DELAY: ${{ inputs.delay }}
+    INPUT_QUIET: ${{ inputs.quiet }}
+    INPUT_DRY_RUN: ${{ inputs.dry_run }}
+    INPUT_JSON: ${{ inputs.json }}
+    INPUT_COLOR: ${{ inputs.color }}
+    INPUT_REPORT: ${{ inputs.report }}
+    INPUT_DIFF: ${{ inputs.diff }}
