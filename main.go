@@ -35,21 +35,40 @@ import (
 )
 
 const inspectEndpoint = "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect"
+const sitemapPingEndpoint = "https://www.google.com/ping"
 
-// maxExpand caps sitemap-expanded URLs so a huge sitemap can't blow up a run.
 const maxExpand = 50000
+const httpTimeout = 30 * time.Second
+const backoffBase = 700 * time.Millisecond
+const progressPadding = 12
+const dirPerm = 0o755
+const filePerm = 0o600
+const minDurationForMinutes = 60
+const defaultPollInterval = 30 * time.Second
+const stateIndexed = "INDEXED"
+const stateNotIndexed = "NOT INDEXED"
+const stateError = "ERROR"
+const statePending = "PENDING"
 
+// result is one URL's inspection outcome and the -json / summary contract.
+// Field order here is JSON output order; omitempty keeps error rows short.
 type result struct {
-	URL           string `json:"url"`
-	Indexed       bool   `json:"indexed"`
-	CoverageState string `json:"coverage_state,omitempty"`
-	CrawledAs     string `json:"crawled_as,omitempty"`
-	RobotsState   string `json:"robots_state,omitempty"`
-	PageFetch     string `json:"page_fetch_state,omitempty"`
-	Indexable     string `json:"indexing_state,omitempty"`
-	LastCrawl     string `json:"last_crawl_time,omitempty"`
-	ReferringURLs int    `json:"referring_urls,omitempty"`
-	Error         string `json:"error,omitempty"`
+	URL              string   `json:"url"`
+	InspectedAt      string   `json:"inspected_at"`
+	Indexed          bool     `json:"indexed"`
+	Verdict          string   `json:"verdict,omitempty"`
+	CoverageState    string   `json:"coverage_state,omitempty"`
+	CrawledAs        string   `json:"crawled_as,omitempty"`
+	RobotsState      string   `json:"robots_state,omitempty"`
+	PageFetch        string   `json:"page_fetch_state,omitempty"`
+	Indexable        string   `json:"indexing_state,omitempty"`
+	LastCrawl        string   `json:"last_crawl_time,omitempty"`
+	GoogleCanonical  string   `json:"google_canonical,omitempty"`
+	UserCanonical    string   `json:"user_canonical,omitempty"`
+	Sitemaps         []string `json:"sitemaps,omitempty"`
+	ReferringURLs    int      `json:"referring_urls,omitempty"`
+	ReferringURLList []string `json:"referring_urls_list,omitempty"`
+	Error            string   `json:"error,omitempty"`
 }
 
 // Flag values mirrored at package scope so output helpers (color, etc.) can
@@ -68,6 +87,9 @@ func main() {
 	site := flag.String("site", "https://www.toolsura.com/", "GSC property / site URL")
 	batch := flag.String("batch", "", "file with one URL per line (alternative to positional URL)")
 	delay := flag.Duration("delay", time.Second, "delay between requests (all URLs, including sitemap-expanded)")
+	wait := flag.Duration("wait", 0, "poll until URL is indexed (e.g. 15m), 0 = don't wait")
+	pollInterval := flag.Duration("poll-interval", defaultPollInterval, "polling interval when --wait is set (e.g. 30s)")
+	pingSitemap := flag.String("ping-sitemap", "", "sitemap URL to ping Google after processing (notifies Google to fetch sitemap)")
 	asJSON = flag.Bool("json", false, "output results as JSON")
 	quiet := flag.Bool("q", false, "quiet: show only a progress line + final summary + errors")
 	dryRun := flag.Bool("dry-run", false, "expand & list the URLs that would be inspected, then exit (no API calls)")
@@ -120,6 +142,12 @@ func main() {
 	term := isTerminal(os.Stdout)
 	for i, u := range urls {
 		r := inspect(ctx, client, *site, u, *apiKey)
+
+		// If --wait is set and URL is not yet indexed, poll until indexed or timeout
+		if *wait > 0 && !r.Indexed && r.Error == "" {
+			r = pollUntilIndexed(ctx, client, *site, u, *apiKey, *wait, *pollInterval, term)
+		}
+
 		results = append(results, r)
 		if r.Error != "" {
 			failed++
@@ -130,7 +158,7 @@ func main() {
 				left := time.Duration(total-(i+1)) * *delay
 				fmt.Printf("\r  %d/%d  %-11s (%-7s left)  %s%s",
 					i+1, total, c(stateColor(r), stateLabel(r)), fmtDuration(left), u,
-					strings.Repeat(" ", 12))
+					strings.Repeat(" ", progressPadding))
 			case *quiet:
 				fmt.Printf("  %d/%d  %-11s  %s\n", i+1, total, c(stateColor(r), stateLabel(r)), u)
 			default:
@@ -172,7 +200,8 @@ func main() {
 			}
 		}
 		fmt.Printf("\nSUMMARY: %d indexed, %d not indexed of %d URLs\n", idx, not, len(results))
-		fmt.Printf("  → %s/indexed.txt\n  → %s/not-indexed.txt\n", *report, *report)
+		fmt.Printf("  → %s/indexed.txt\n  → %s/not-indexed.txt\n  → %s/summary.json\n  → %s/results.json\n",
+			*report, *report, *report, *report)
 	}
 
 	if *diff != "" {
@@ -182,6 +211,18 @@ func main() {
 		}
 		if err := printDiff(*diff, base, results); err != nil {
 			log.Fatalf("diff: %v", err)
+		}
+	}
+
+	// Ping sitemap if requested (notifies Google to re-fetch sitemap)
+	if *pingSitemap != "" {
+		if !*asJSON && !*quiet {
+			fmt.Printf("→ pinging sitemap: %s\n", *pingSitemap)
+		}
+		if err := pingSitemapURL(*pingSitemap); err != nil {
+			log.Printf("warning: sitemap ping failed: %v", err)
+		} else if !*asJSON && !*quiet {
+			fmt.Println("  sitemap ping successful")
 		}
 	}
 
@@ -277,7 +318,7 @@ func expandURLs(raw []string) ([]string, error) {
 
 // sitemapClient fetches sitemaps with a bounded timeout so a stalled host
 // can't hang the whole run.
-var sitemapClient = &http.Client{Timeout: 30 * time.Second}
+var sitemapClient = &http.Client{Timeout: httpTimeout}
 
 // sitemapFetch is the function used to retrieve a sitemap's body. It is a
 // variable (not a direct http.Get call) so tests can substitute a fake.
@@ -338,6 +379,43 @@ func sitemapURLs(smURL string) ([]string, error) {
 	return expanded, nil
 }
 
+// pingSitemapURL notifies Google that a sitemap has been updated.
+// Google will then fetch and process the sitemap, discovering new/updated URLs.
+func pingSitemapURL(sitemapURL string) error {
+	// Validate URL
+	parsed, err := url.Parse(sitemapURL)
+	if err != nil {
+		return fmt.Errorf("invalid sitemap URL: %w", err)
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("sitemap URL must be absolute (include scheme and host)")
+	}
+
+	// Build ping URL: https://www.google.com/ping?sitemap=<encoded_url>
+	pingURL := sitemapPingEndpoint + "?sitemap=" + url.QueryEscape(sitemapURL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pingURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create ping request: %w", err)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("ping request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("ping returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
 // authClient returns an *http.Client. With an API key it is a plain client
 // (key sent as a query param per request); otherwise it builds a
 // service-account OAuth client. GSC requires OAuth, so prefer -creds.
@@ -345,7 +423,7 @@ func sitemapURLs(smURL string) ([]string, error) {
 // instead of hanging the whole run.
 func authClient(ctx context.Context, creds, apiKey string) (*http.Client, error) {
 	if apiKey != "" {
-		return &http.Client{Timeout: 30 * time.Second}, nil
+		return &http.Client{Timeout: httpTimeout}, nil
 	}
 	b, err := os.ReadFile(creds)
 	if err != nil {
@@ -359,7 +437,7 @@ func authClient(ctx context.Context, creds, apiKey string) (*http.Client, error)
 	// the library's own client; add a transport with timeouts if refreshes are
 	// observed to stall under heavy throttling.
 	client := cfg.Client(ctx)
-	client.Timeout = 30 * time.Second
+	client.Timeout = httpTimeout
 	return client, nil
 }
 
@@ -382,7 +460,7 @@ func inspect(ctx context.Context, client *http.Client, site, u, apiKey string) r
 	var status int
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		reqCtx, cancel := context.WithTimeout(ctx, httpTimeout)
 		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, strings.NewReader(string(body)))
 		if err != nil {
 			cancel()
@@ -394,7 +472,7 @@ func inspect(ctx context.Context, client *http.Client, site, u, apiKey string) r
 		if err != nil {
 			cancel()
 			lastErr = err
-			time.Sleep(time.Duration(attempt+1) * 700 * time.Millisecond)
+			time.Sleep(time.Duration(attempt+1) * backoffBase)
 			continue
 		}
 		raw, _ = io.ReadAll(resp.Body)
@@ -403,7 +481,7 @@ func inspect(ctx context.Context, client *http.Client, site, u, apiKey string) r
 		status = resp.StatusCode
 		lastErr = nil
 		if status == http.StatusTooManyRequests || status >= 500 {
-			time.Sleep(time.Duration(attempt+1) * 700 * time.Millisecond)
+			time.Sleep(time.Duration(attempt+1) * backoffBase)
 			continue
 		}
 		break
@@ -419,19 +497,85 @@ func inspect(ctx context.Context, client *http.Client, site, u, apiKey string) r
 	return parseInspection(u, raw)
 }
 
+// pollUntilIndexed repeatedly calls inspect until the URL is indexed,
+// the timeout expires, or an error occurs.
+func pollUntilIndexed(ctx context.Context, client *http.Client, site, u, apiKey string, timeout, interval time.Duration, term bool) result {
+	deadline := time.Now().Add(timeout)
+	start := time.Now()
+	attempt := 0
+
+	for {
+		// Check timeout
+		if time.Now().After(deadline) {
+			return result{URL: u, Error: fmt.Sprintf("timeout after %v: URL not indexed", timeout)}
+		}
+
+		attempt++
+		elapsed := time.Since(start)
+
+		// Poll
+		r := inspect(ctx, client, site, u, apiKey)
+
+		// Print progress if not JSON mode
+		if term {
+			state := statePending
+			color := ansiYellow
+			if r.Indexed {
+				state = stateIndexed
+				color = ansiGreen
+			} else if r.Error != "" {
+				state = stateError
+				color = ansiRed
+			}
+			fmt.Printf("\r  [%d] %s  [%-7s]  (%s elapsed)%s",
+				attempt, u, c(color, state), fmtDuration(elapsed),
+				strings.Repeat(" ", progressPadding))
+		} else {
+			fmt.Printf("  [%d] %s  [%s]  (%s elapsed)\n",
+				attempt, u, stateLabel(r), fmtDuration(elapsed))
+		}
+
+		if r.Indexed {
+			if term {
+				fmt.Println()
+			}
+			return r
+		}
+		if r.Error != "" {
+			if term {
+				fmt.Println()
+			}
+			return r
+		}
+
+		// Wait for next poll
+		sleepDuration := interval
+		if time.Now().Add(sleepDuration).After(deadline) {
+			sleepDuration = time.Until(deadline)
+		}
+		if sleepDuration <= 0 {
+			return result{URL: u, Error: fmt.Sprintf("timeout after %v: URL not indexed", timeout)}
+		}
+		time.Sleep(sleepDuration)
+	}
+}
+
 // parseInspection pulls the fields we care about out of the inspection result.
 func parseInspection(u string, raw []byte) result {
 	var full struct {
 		InspectionResult struct {
 			IndexStatusResult struct {
-				CoverageState  string   `json:"coverageState"`
-				CrawledAs      string   `json:"crawledAs"`
-				RobotsState    string   `json:"robotsState"`
-				PageFetchState string   `json:"pageFetchState"`
-				IndexingState  string   `json:"indexingState"`
-				LastCrawlTime  string   `json:"lastCrawlTime"`
-				ReferringURLs  []string `json:"referringUrls"`
-				Verdict        string   `json:"verdict"`
+				CoverageState   string   `json:"coverageState"`
+				CrawledAs       string   `json:"crawledAs"`
+				RobotsState     string   `json:"robotsState"`
+				PageFetchState  string   `json:"pageFetchState"`
+				IndexingState   string   `json:"indexingState"`
+				LastCrawlTime   string   `json:"lastCrawlTime"`
+				Verdict         string   `json:"verdict"`
+				GoogleCanonical string   `json:"googleCanonical"`
+				UserCanonical   string   `json:"userCanonical"`
+				Sitemaps        []string `json:"sitemap"`
+				ReferringURLs   []string `json:"referringUrls"`
 			} `json:"indexStatusResult"`
 		} `json:"inspectionResult"`
 	}
@@ -441,43 +585,91 @@ func parseInspection(u string, raw []byte) result {
 		return r
 	}
 	ir := full.InspectionResult.IndexStatusResult
+	r.InspectedAt = time.Now().UTC().Format(time.RFC3339)
+	r.Verdict = ir.Verdict
 	r.CoverageState = ir.CoverageState
 	r.CrawledAs = ir.CrawledAs
 	r.RobotsState = ir.RobotsState
 	r.PageFetch = ir.PageFetchState
 	r.Indexable = ir.IndexingState
 	r.LastCrawl = ir.LastCrawlTime
+	r.GoogleCanonical = ir.GoogleCanonical
+	r.UserCanonical = ir.UserCanonical
+	r.Sitemaps = ir.Sitemaps
 	r.ReferringURLs = len(ir.ReferringURLs)
+	r.ReferringURLList = ir.ReferringURLs
 	// A URL is "indexed" when Google has it in the index (verdict PASS and a
 	// non-excluded coverage state).
 	r.Indexed = ir.Verdict == "PASS" && !strings.Contains(strings.ToLower(ir.CoverageState), "excluded")
 	return r
 }
 
+// friendlyTime renders an ISO timestamp as a compact relative age
+// ("3d ago", "2h ago") — easier to scan at a glance than raw RFC3339.
+func friendlyTime(ts string) string {
+	if ts == "" {
+		return "never"
+	}
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return ts
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		return t.Format("2006-01-02")
+	}
+}
+
+// printResult renders one URL's full inspection line (default, non-quiet mode).
+// Layout: bold URL + symbol/label on line 1; dim detail fields on line 2,
+// skipping empty values so a clean result doesn't trail "robots:  ".
 func printResult(r result, idx, total int) {
-	pos := fmt.Sprintf("[%d/%d] ", idx, total)
+	fmt.Printf("%s %s\n", c(ansiDim, fmt.Sprintf("[%d/%d]", idx, total)), c(ansiBold, r.URL))
 	if r.Error != "" {
-		fmt.Printf("%s%s %s\n    %s %s\n", pos, c(ansiRed, "✗"), r.URL, c(ansiRed, "error:"), r.Error)
+		fmt.Printf("  %s %s\n", c(ansiRed, "✗ ERROR"), r.Error)
 		return
 	}
-	state, stateCode := "NOT INDEXED", ansiYellow
+
+	state, stateCode, sym := stateNotIndexed, ansiYellow, "⚠"
 	if r.Indexed {
-		state, stateCode = "INDEXED", ansiGreen
+		state, stateCode, sym = stateIndexed, ansiGreen, "✓"
 	}
-	fmt.Printf("%s• %s  [%s]\n", pos, r.URL, c(stateCode, state))
-	fmt.Printf("    coverage: %s | fetch: %s | robots: %s | last crawl: %s\n",
-		r.CoverageState, r.PageFetch, r.RobotsState, r.LastCrawl)
+	fmt.Printf("  %s\n", c(stateCode, sym+" "+state))
+
+	var fields []string
+	if r.CoverageState != "" {
+		fields = append(fields, "coverage: "+r.CoverageState)
+	}
+	if r.PageFetch != "" {
+		fields = append(fields, "fetch: "+r.PageFetch)
+	}
+	if r.RobotsState != "" {
+		fields = append(fields, "robots: "+r.RobotsState)
+	}
+	if r.LastCrawl != "" {
+		fields = append(fields, "crawled: "+friendlyTime(r.LastCrawl))
+	}
+	if len(fields) > 0 {
+		fmt.Printf("  %s\n", c(ansiDim, strings.Join(fields, "  ·  ")))
+	}
 }
 
 // stateLabel is the one-word status used by the quiet progress line.
 func stateLabel(r result) string {
 	switch {
 	case r.Error != "":
-		return "ERROR"
+		return stateError
 	case r.Indexed:
-		return "INDEXED"
+		return stateIndexed
 	default:
-		return "NOT INDEXED"
+		return stateNotIndexed
 	}
 }
 
@@ -487,10 +679,10 @@ func fmtDuration(d time.Duration) string {
 		return "0s"
 	}
 	s := int(d.Seconds())
-	if s < 60 {
+	if s < minDurationForMinutes {
 		return fmt.Sprintf("%ds", s)
 	}
-	return fmt.Sprintf("%dm%02ds", s/60, s%60)
+	return fmt.Sprintf("%dm%02ds", s/minDurationForMinutes, s%minDurationForMinutes)
 }
 
 // isTerminal reports whether f is an interactive character device (vs a pipe
@@ -515,23 +707,30 @@ func usage() {
 	flag.PrintDefaults()
 }
 
-// ANSI color codes. Color is purely decorative — the textual state (INDEXED /
-// NOT INDEXED / ERROR) always carries the meaning, so output stays readable
-// when color is off or stripped by a pipe.
+// ANSI color codes. Color is purely decorative — the symbol + textual state
+// (✓ INDEXED / ⚠ NOT INDEXED / ✗ ERROR) always carries the meaning, so output
+// stays readable when color is off, stripped by a pipe, or for color-blind
+// users. Standard 16-color codes adapt to the user's terminal theme.
 const (
 	ansiReset  = "\033[0m"
+	ansiBold   = "\033[1m"
+	ansiDim    = "\033[2m"
 	ansiRed    = "\033[31m"
 	ansiGreen  = "\033[32m"
 	ansiYellow = "\033[33m"
 )
 
 // colorActive reports whether colored output should be emitted: never for
-// JSON (it would corrupt the data), forced by -color=always/never, and on by
-// default only when stdout is an interactive terminal.
+// JSON (it would corrupt the data), forced by -color=always/never, disabled
+// by the NO_COLOR env convention (https://no-color.org), and on by default
+// only when stdout is an interactive terminal.
 func colorActive() bool {
 	// Guard against nil so output helpers are callable before flag.Parse
 	// (e.g. direct unit tests) — default to no color in that case.
 	if asJSON != nil && *asJSON {
+		return false
+	}
+	if os.Getenv("NO_COLOR") != "" {
 		return false
 	}
 	switch {
@@ -567,7 +766,7 @@ func stateColor(r result) string {
 // writeReport splits results into indexed.txt / not-indexed.txt and writes a
 // summary.json so you can see at a glance what Google has vs. hasn't.
 func writeReport(dir string, results []result) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, dirPerm); err != nil {
 		return err
 	}
 	idx, err := os.Create(filepath.Join(dir, "indexed.txt"))
@@ -591,7 +790,15 @@ func writeReport(dir string, results []result) error {
 
 	summary := buildSummary(results)
 	b, _ := json.MarshalIndent(summary, "", "  ")
-	return os.WriteFile(filepath.Join(dir, "summary.json"), b, 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "summary.json"), b, filePerm); err != nil {
+		return err
+	}
+
+	// results.json keeps the full per-URL detail (verdict, canonicals,
+	// sitemaps, referring URLs, inspected_at) so a run's raw data survives
+	// even without -json on the terminal.
+	detail, _ := json.MarshalIndent(results, "", "  ")
+	return os.WriteFile(filepath.Join(dir, "results.json"), detail, filePerm)
 }
 
 // summary is the on-disk shape written to summary.json (and read by -diff).

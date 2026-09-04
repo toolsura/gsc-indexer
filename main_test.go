@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -141,7 +142,7 @@ func TestExpandURLs(t *testing.T) {
 				return mockResp(200, `<urlset><url><loc>https://a.example/p1</loc></url></urlset>`), nil
 			default:
 				t.Fatalf("unexpected sitemap url %s", u)
-				return nil, nil
+				return nil, fmt.Errorf("unexpected sitemap url %s", u)
 			}
 		}
 		got, err := expandURLs([]string{"https://a.example/index.xml"})
