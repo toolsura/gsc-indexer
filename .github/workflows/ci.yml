@@ -40,7 +40,7 @@ jobs:
           # ponytail: 25% floor for now — ratchet upward as tests are added.
           awk -v c="$COVERAGE" 'BEGIN { if (c < 25) { print "Coverage " c "% is below 25% floor"; exit 1 } }'
       - name: Upload coverage
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         if: matrix.go-version == '1.25' && matrix.os == 'ubuntu-latest'
         with:
           files: coverage.out
