@@ -269,7 +269,7 @@ func collectURLs(batch string, args []string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		sc := bufio.NewScanner(f)
 		for sc.Scan() {
 			add(sc.Text())
@@ -333,7 +333,7 @@ func sitemapURLs(smURL string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
@@ -407,7 +407,7 @@ func pingSitemapURL(sitemapURL string) error {
 	if err != nil {
 		return fmt.Errorf("ping request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -476,7 +476,7 @@ func inspect(ctx context.Context, client *http.Client, site, u, apiKey string) r
 			continue
 		}
 		raw, _ = io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		cancel()
 		status = resp.StatusCode
 		lastErr = nil
@@ -764,7 +764,8 @@ func stateColor(r result) string {
 }
 
 // writeReport splits results into indexed.txt / not-indexed.txt and writes a
-// summary.json so you can see at a glance what Google has vs. hasn't.
+// summary.json + results.json so you can see at a glance what Google has
+// vs. hasn't.
 func writeReport(dir string, results []result) error {
 	if err := os.MkdirAll(dir, dirPerm); err != nil {
 		return err
@@ -773,19 +774,29 @@ func writeReport(dir string, results []result) error {
 	if err != nil {
 		return err
 	}
-	defer idx.Close()
 	nf, err := os.Create(filepath.Join(dir, "not-indexed.txt"))
 	if err != nil {
+		_ = idx.Close() // best-effort: the create error is what matters
 		return err
 	}
-	defer nf.Close()
 
 	for _, r := range results {
-		if r.Error != "" || !r.Indexed {
-			fmt.Fprintln(nf, r.URL)
-			continue
+		w := nf // not-indexed gets errors and non-indexed URLs
+		if r.Error == "" && r.Indexed {
+			w = idx
 		}
-		fmt.Fprintln(idx, r.URL)
+		if _, err := fmt.Fprintln(w, r.URL); err != nil {
+			return fmt.Errorf("writing %s: %w", w.Name(), err)
+		}
+	}
+
+	// Flush both files before writing summaries so a Close error surfaces
+	// (a silently truncated report is worse than a failed run).
+	if err := idx.Close(); err != nil {
+		return fmt.Errorf("closing indexed.txt: %w", err)
+	}
+	if err := nf.Close(); err != nil {
+		return fmt.Errorf("closing not-indexed.txt: %w", err)
 	}
 
 	summary := buildSummary(results)

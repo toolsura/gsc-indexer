@@ -279,7 +279,7 @@ func captureStdout(buf *bytes.Buffer, fn func()) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 	fn()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = old
 	_, _ = buf.ReadFrom(r)
 }
