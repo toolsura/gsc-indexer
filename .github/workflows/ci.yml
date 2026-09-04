@@ -54,17 +54,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          # stable toolchain so source builds can target go.mod's 1.25.0 —
-          # prebuilt golangci-lint binaries are built with go1.24 and
-          # refuse to load a go1.25 project.
           go-version: 'stable'
           cache: true
+      # Built from source with the stable toolchain: the action's prebuilt
+      # binaries are built with go1.24 and refuse to load a go 1.25 module.
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          install-mode: source
-          args: --timeout=5m
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          $(go env GOPATH)/bin/golangci-lint run --timeout=5m
 
   staticcheck:
     name: Staticcheck
@@ -94,11 +91,13 @@ jobs:
         run: |
           go install github.com/securego/gosec/v2/cmd/gosec@latest
           # Excluded by design for this CLI:
-          # G304 — user-supplied paths (-creds, -diff, -batch) are the tool's purpose
-          # G704  — taint-analysis false positive: the endpoint is a fixed Google
-          #         API constant; user input only fills a query param / JSON body
+          # G304/G703 — user-supplied paths (-creds, -diff, -batch, -report)
+          #             are the tool's purpose; a CLI reads/writes where its
+          #             operator points it on their own machine
+          # G704  — taint-analysis false positive: the endpoint is a fixed
+          #         Google API constant; user input only fills a JSON body
           # G104  — unhandled resp.Body.Close() after a full read is harmless
-          $(go env GOPATH)/bin/gosec -quiet -exclude G104,G304,G704 ./...
+          $(go env GOPATH)/bin/gosec -quiet -exclude G104,G304,G703,G704 ./...
 
   vet:
     name: Go Vet
