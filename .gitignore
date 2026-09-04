@@ -35,6 +35,12 @@ credentials.json
 blog-drafts/
 .claude/
 
+# Local run artifacts / personal data — not for the repo
+Tempreport/
+report/
+blogs_urls.txt
+get_access_token.py
+
 # Editor and OS cruft
 .idea/
 .vscode/

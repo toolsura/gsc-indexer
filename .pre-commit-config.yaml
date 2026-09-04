@@ -1,0 +1,85 @@
+# Pre-commit hooks for gsc-indexer
+# Install: pip install pre-commit && pre-commit install
+# Run: pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v1.61.0
+    hooks:
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run --timeout=3m
+        language: system
+        types: [go]
+        require_serial: true
+        pass_filenames: false
+
+  - repo: https://github.com/securego/gosec
+    rev: v2.21.0
+    hooks:
+      - id: gosec
+        name: gosec
+        entry: gosec -quiet
+        language: system
+        types: [go]
+        args: [./...]
+        require_serial: true
+        pass_filenames: false
+
+  - repo: local
+    hooks:
+      - id: go-fmt
+        name: go fmt
+        entry: gofmt -w
+        language: system
+        types: [go]
+        require_serial: true
+
+      - id: go-imports
+        name: go imports
+        entry: goimports -w
+        language: system
+        types: [go]
+        require_serial: true
+
+      - id: go-vet
+        name: go vet
+        entry: go vet
+        language: system
+        types: [go]
+        args: [./...]
+        require_serial: true
+        pass_filenames: false
+
+      - id: go-test
+        name: go test (race)
+        entry: go test -race -short
+        language: system
+        types: [go]
+        args: [./...]
+        require_serial: true
+        pass_filenames: false
+
+      - id: go-mod-tidy
+        name: go mod tidy
+        entry: go mod tidy
+        language: system
+        types: [go]
+        args: []
+        require_serial: true
+        pass_filenames: false
+        always_run: true
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        types: [go, yml, yaml, md, txt]
+      - id: end-of-file-fixer
+        types: [go, yml, yaml, md, txt]
+      - id: check-yaml
+        types: [yaml, yml]
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: check-merge-conflict
+      - id: detect-private-key

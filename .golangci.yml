@@ -1,0 +1,97 @@
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+  build-tags: []
+  buildvcs: false
+
+linters:
+  enable:
+    - bodyclose
+    - copyloopvar
+    - dogsled
+    - dupl
+    - errcheck
+    - exhaustive
+    - gochecknoinits
+    - goconst
+    - gofmt
+    - goimports
+    - goprintffuncname
+    - gosimple
+    - govet
+    - ineffassign
+    - misspell
+    - nilerr
+    - nilnil
+    - noctx
+    - nolintlint
+    - prealloc
+    - predeclared
+    - promlinter
+    - revive
+    - staticcheck
+    - stylecheck
+    - testifylint
+    - thelper
+    - unconvert
+    - unused
+    - usetesting
+    - whitespace
+  disable:
+    - cyclop
+    - wsl
+    - depguard
+    - gocyclo
+    - funlen
+    - gocritic
+    - mnd
+    - lll
+    - gosec
+    - nakedret
+    - nestif
+    - unparam
+
+linters-settings:
+  funlen:
+    lines: 80
+    statements: 50
+  gocyclo:
+    min-complexity: 15
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+  gosec:
+    excludes:
+      - G104 # unhandled error
+  lll:
+    line-length: 120
+  nestif:
+    min-complexity: 4
+  revive:
+    rules:
+      - name: exported
+        severity: warning
+        disabled: false
+  staticcheck:
+    checks: ["all", "-ST1000", "-ST1003"]
+  unused:
+    check-exported: false
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+        - funlen
+        - gocyclo
+        - lll
+    - linters:
+        - lll
+      source: "^//go:generate "
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+output:
+  format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
